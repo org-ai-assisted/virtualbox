@@ -189,17 +189,23 @@ PCI: 00:00:05.0 [8086/2415] enabled     # AC97 audio
 
 The full serial capture is in `org-ai-assisted/dasharo` under `proof/`.
 
-A real `DasharoPayloadPkg` image was also built and integrated (coreboot
-`fallback/payload`, LZMA, load `0x800000`, entry `0x800860`) and the patched
-VirtualBox loads and runs it exactly the same way -- coreboot reaches ramstage and
-drives VirtualBox's chipset. It does **not** yet reach the UEFI shell inside
-VirtualBox: coreboot's `emulation/qemu-i440fx` board expects QEMU's PIIX4 ACPI
-function at `00:01.3` (`[8086/7113]`) and the `fw_cfg` port, neither of which
-VirtualBox emulates, so ramstage trips an early ACPI S5 power-down (`PCI: Static
-device PCI: 00:00:01.3 not found` then `ACPI: Entering S5` in VBox.log). The coreboot
--> `DasharoPayloadPkg` hand-off itself is proven under QEMU with the identical image.
-Closing that gap needs a VirtualBox-matched coreboot board (or PIIX4-ACPI/`fw_cfg`
-emulation in VirtualBox); see `org-ai-assisted/dasharo` `proof/` for both logs.
+With both fixes in place, a real coreboot `UefiPayloadPkg` boots all the way to an
+**interactive UEFI shell** inside the patched VirtualBox, with ACPI functional:
+
+```
+UEFI Interactive Shell v2.2
+EDK II
+UEFI v2.70 (EDK II, 0x00010000)
+Shell>
+```
+
+and `reset -s` at that prompt (an ACPI S5 shutdown written *with* `SLP_EN`) powers the
+VM off cleanly -- the other half of the `SLP_EN` fix. The payload-side build/VM tweaks
+needed to get there (a 36-bit `--cpuid-set` to tame the 48-bit identity map, `--hpet
+on`, the LAPIC timer, and a coreboot skip-empty-MCFG fix) and the full reproduce recipe
+live in `org-ai-assisted/dasharo` (`proof/uefi-shell-in-vbox.log`). Those are platform
+details on the coreboot/payload side; the VirtualBox change is just the two fixes
+above.
 
 ## Upstreaming
 
