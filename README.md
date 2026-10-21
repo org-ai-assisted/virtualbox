@@ -152,15 +152,45 @@ PCI: 00:00:04.0 [80ee/cafe] enabled     # VirtualBox guest-service device
 PCI: 00:00:05.0 [8086/2415] enabled     # AC97 audio
 ```
 
-The full serial capture is in `org-ai-assisted/dasharo` under `proof/`. With
-`PAYLOAD_NONE` coreboot stops after device enumeration; a real payload
-(`DasharoPayloadPkg`) boots on from there.
+The full serial capture is in `org-ai-assisted/dasharo` under `proof/`.
+
+A real `DasharoPayloadPkg` image was also built and integrated (coreboot
+`fallback/payload`, LZMA, load `0x800000`, entry `0x800860`) and the patched
+VirtualBox loads and runs it exactly the same way -- coreboot reaches ramstage and
+drives VirtualBox's chipset. It does **not** yet reach the UEFI shell inside
+VirtualBox: coreboot's `emulation/qemu-i440fx` board expects QEMU's PIIX4 ACPI
+function at `00:01.3` (`[8086/7113]`) and the `fw_cfg` port, neither of which
+VirtualBox emulates, so ramstage trips an early ACPI S5 power-down (`PCI: Static
+device PCI: 00:00:01.3 not found` then `ACPI: Entering S5` in VBox.log). The coreboot
+-> `DasharoPayloadPkg` hand-off itself is proven under QEMU with the identical image.
+Closing that gap needs a VirtualBox-matched coreboot board (or PIIX4-ACPI/`fw_cfg`
+emulation in VirtualBox); see `org-ai-assisted/dasharo` `proof/` for both logs.
 
 ## Upstreaming
 
-The idiomatic long-term home for this is a dedicated loader path rather than an
-`#ifdef`. The change is intentionally minimal and self-contained so it can be offered
-to upstream VirtualBox as the "load a raw coreboot/flat firmware image" capability.
+The change is intentionally minimal, self-contained, and **ring-3 only**, so it can
+be offered to upstream VirtualBox as the "load a raw coreboot/flat firmware image"
+capability. The exact upstreamable diff against pristine VirtualBox 7.2.20 is just
+three hunks, 35 insertions / 8 deletions, all in `src/VBox/Devices/EFI/DevEFI.cpp`:
+
+- drop the now-wrong `RT_NOREF(pCfg)` in `efiLoadRom`,
+- add the `CorebootRom` branch (maps the raw image, vestigial flash below it),
+- add `"CorebootRom|"` to the `PDMDEV_VALIDATE_CONFIG_RETURN` allow-list.
+
+It touches no shared struct and no ring-0 code, so it needs no ring-0 rebuild. The
+vestigial 4 KiB flash is the minimal way to keep `pThis->Flash` valid for the
+unchanged flash/MMIO/saved-state paths without guarding each use behind a mode check.
+
+To regenerate that exact patch, diff this repo's file against the pristine 7.2.20
+source and drop the two incidental, non-feature hunks this repo's ASCII/formatting
+gates introduced (one em dash normalized to `--`, one trailing blank line removed):
+
+```
+diff -u VirtualBox-7.2.20/src/VBox/Devices/EFI/DevEFI.cpp \
+        virtualbox/src/VBox/Devices/EFI/DevEFI.cpp
+# keep only the three efiLoadRom / config-validation hunks above;
+# the em-dash comment hunk and the trailing-blank hunk are not part of the feature.
+```
 
 ## License
 
