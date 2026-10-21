@@ -89,6 +89,41 @@ The design is deliberately **ring-3 only**:
 - Keeping the vestigial flash fully instantiated is what keeps the ring-0 MMIO setup
   valid without any ring-0 code change.
 
+## Second fix: ACPI S5 on `SLP_TYP` without `SLP_EN` (`DevACPI.cpp`)
+
+Loading coreboot was not enough to boot it: with the guest's ACPI device enabled,
+coreboot powered the VM off partway through ramstage. Root cause, traced on the wire:
+coreboot's PIIX4 southbridge (`i82371eb`) writes `SUS_TYP_S0 | SCI_EN` to the PM1a
+control register -- value `0x1401`, i.e. `SLP_TYP = 5` with `SLP_EN` (bit 13)
+**clear**. On real PIIX4 that is a harmless "arm the S0 sleep type and enable SCI"
+write; nothing sleeps, because the ACPI spec (1.0, section 4.7.2.2.1) makes `SLP_EN`
+the trigger -- `SLP_TYP` alone only selects which state a *subsequent* `SLP_EN=1`
+would enter.
+
+VirtualBox's `acpiR3PM1aCtlWrite` decided the sleep state from `SLP_TYP` **alone**,
+without checking `SLP_EN`, and its `SLP_TYP` encoding maps 5 to S5 -- so it read
+coreboot's arm-S0 write as "enter S5" and powered off. The one-line, spec-correct
+fix gates the transition on `SLP_EN`:
+
+```c
+/* ACPI 1.0+ 4.7.2.2.1: the sleep transition is triggered by SLP_EN, not by
+   the SLP_TYP value alone.  Firmware legitimately pre-arms SLP_TYP (e.g.
+   coreboot writes SUS_TYP|SCI_EN with SLP_EN clear); acting on SLP_TYP
+   without SLP_EN spuriously powers the VM off. */
+if ((u32 & SLP_EN) && uSleepState != pThis->uSleepState)
+```
+
+With this, coreboot runs to completion with the ACPI device **enabled** -- it writes
+its own ACPI tables and hands off to the payload -- and ACPI stays **functional**: a
+normal guest shutdown sets `SLP_TYP=5` together with `SLP_EN`, which still powers the
+VM off. (VirtualBox relocates its PM I/O decode from the `PMBA` config write coreboot
+makes, so coreboot's FADT and the emulated ports line up.) The change is a strict
+superset of correctness -- it only ignores a class of writes the spec already says do
+nothing -- so it is safe for every existing guest and is offered upstream too.
+
+Without this fix, `--acpi off` lets coreboot boot but leaves the guest with no working
+ACPI power management; the fix is what makes ACPI both present and functional.
+
 ## Build
 
 Drop the modified `DevEFI.cpp` into an upstream VirtualBox 7.2.20 source tree (same
